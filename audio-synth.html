@@ -1,13 +1,413 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Synthesizing</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <h1>Audio Synthesizing Project</h1>
-    <p>Start working on your audio generation app here!</p>
-</body>
-</html>
+import React, { useState, useEffect, useCallback } from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
+import { Play, Square } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+const WaveFunctionVisualizer = () => {
+  // Audio state
+  const [waveType, setWaveType] = useState('sine');
+  const [frequency, setFrequency] = useState(2);
+  const [amplitude, setAmplitude] = useState(0.8);
+  const [detune, setDetune] = useState(0);
+  const [filterType, setFilterType] = useState('lowpass');
+  const [filterFreq, setFilterFreq] = useState(2000);
+  const [filterQ, setFilterQ] = useState(1);
+  const [attack, setAttack] = useState(0.1);
+  const [release, setRelease] = useState(0.1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  
+  // Audio nodes
+  const [audioContext, setAudioContext] = useState(null);
+  const [oscillator, setOscillator] = useState(null);
+  const [gainNode, setGainNode] = useState(null);
+  const [filterNode, setFilterNode] = useState(null);
+  
+  const canvasWidth = 600;
+  const canvasHeight = 300;
+
+  const getDetuneMultiplier = (detuneCents) => {
+    return Math.pow(2, detuneCents/1200);
+  };
+
+  // Audio initialization and control functions
+  const initAudio = () => {
+    if (!audioContext) {
+      const newAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      setAudioContext(newAudioContext);
+    } else if (audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+  };
+
+  const togglePlay = () => {
+    initAudio();
+    
+    if (!isPlaying) {
+      const newOscillator = audioContext.createOscillator();
+      const newGainNode = audioContext.createGain();
+      const newFilterNode = audioContext.createBiquadFilter();
+      
+      newOscillator.type = waveType;
+      newOscillator.frequency.setValueAtTime(440 * frequency, audioContext.currentTime);
+      newOscillator.detune.setValueAtTime(detune, audioContext.currentTime);
+      
+      newFilterNode.type = filterType;
+      newFilterNode.frequency.setValueAtTime(filterFreq, audioContext.currentTime);
+      newFilterNode.Q.setValueAtTime(filterQ, audioContext.currentTime);
+      
+      newGainNode.gain.setValueAtTime(0, audioContext.currentTime);
+      newGainNode.gain.linearRampToValueAtTime(
+        amplitude,
+        audioContext.currentTime + attack
+      );
+      
+      newOscillator.connect(newFilterNode);
+      newFilterNode.connect(newGainNode);
+      newGainNode.connect(audioContext.destination);
+      
+      newOscillator.start();
+      setOscillator(newOscillator);
+      setGainNode(newGainNode);
+      setFilterNode(newFilterNode);
+      setIsPlaying(true);
+    } else {
+      if (gainNode) {
+        gainNode.gain.linearRampToValueAtTime(
+          0,
+          audioContext.currentTime + release
+        );
+        setTimeout(() => {
+          if (oscillator) {
+            oscillator.stop();
+            oscillator.disconnect();
+          }
+          if (filterNode) {
+            filterNode.disconnect();
+          }
+          if (gainNode) {
+            gainNode.disconnect();
+          }
+        }, release * 1000);
+      }
+      setOscillator(null);
+      setGainNode(null);
+      setFilterNode(null);
+      setIsPlaying(false);
+    }
+  };
+
+  // Audio parameter update effects
+  useEffect(() => {
+    if (oscillator && isPlaying) {
+      oscillator.frequency.setValueAtTime(440 * frequency, audioContext.currentTime);
+      oscillator.type = waveType;
+      oscillator.detune.setValueAtTime(detune, audioContext.currentTime);
+    }
+  }, [frequency, waveType, detune, oscillator, isPlaying, audioContext]);
+
+  useEffect(() => {
+    if (gainNode && isPlaying) {
+      gainNode.gain.setValueAtTime(amplitude, audioContext.currentTime);
+    }
+  }, [amplitude, gainNode, isPlaying, audioContext]);
+
+  useEffect(() => {
+    if (filterNode && isPlaying) {
+      filterNode.frequency.setValueAtTime(filterFreq, audioContext.currentTime);
+      filterNode.Q.setValueAtTime(filterQ, audioContext.currentTime);
+      filterNode.type = filterType;
+    }
+  }, [filterFreq, filterQ, filterType, filterNode, isPlaying, audioContext]);
+
+  // Cleanup effect
+  useEffect(() => {
+    return () => {
+      if (oscillator) {
+        oscillator.stop();
+        oscillator.disconnect();
+      }
+      if (filterNode) {
+        filterNode.disconnect();
+      }
+      if (gainNode) {
+        gainNode.disconnect();
+      }
+      if (audioContext) {
+        audioContext.close();
+      }
+    };
+  }, []);
+
+  // Wave visualization
+  const calculateWavePoints = useCallback((type, x, freq) => {
+    const t = x / canvasWidth;
+
+    switch (type) {
+      case 'sine':
+        return amplitude * Math.sin(2 * Math.PI * freq * t);
+      case 'sawtooth':
+        return amplitude * (2 * (t * freq - Math.floor(t * freq + 0.5)));
+      case 'square':
+        return amplitude * Math.sign(Math.sin(2 * Math.PI * freq * t));
+      case 'triangle':
+        return amplitude * (Math.abs((t * freq * 4 - 1) % 4 - 2) - 1);
+      default:
+        return 0;
+    }
+  }, [amplitude]);
+
+  const draw = useCallback(() => {
+    const canvas = document.getElementById('waveCanvas');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+    // Draw grid
+    ctx.beginPath();
+    ctx.strokeStyle = '#eee';
+    ctx.lineWidth = 1;
+    
+    for (let x = 50; x < canvasWidth; x += 50) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvasHeight);
+    }
+    
+    for (let y = 50; y < canvasHeight; y += 50) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvasWidth, y);
+    }
+    ctx.stroke();
+
+    // Draw axes
+    ctx.beginPath();
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 2;
+    ctx.moveTo(0, canvasHeight / 2);
+    ctx.lineTo(canvasWidth, canvasHeight / 2);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, canvasHeight);
+    ctx.stroke();
+
+    // Draw original wave
+    ctx.beginPath();
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2;
+
+    for (let x = 0; x < canvasWidth; x++) {
+      const y = calculateWavePoints(waveType, x, frequency);
+      const canvasY = (canvasHeight / 2) * (1 - y);
+      
+      if (x === 0) {
+        ctx.moveTo(x, canvasY);
+      } else {
+        ctx.lineTo(x, canvasY);
+      }
+    }
+    ctx.stroke();
+
+    // Draw detuned wave if detune is not 0
+    if (detune !== 0) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#dc2626';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+
+      const detuneMultiplier = getDetuneMultiplier(detune);
+      const detunedFrequency = frequency * detuneMultiplier;
+
+      for (let x = 0; x < canvasWidth; x++) {
+        const y = calculateWavePoints(waveType, x, detunedFrequency);
+        const canvasY = (canvasHeight / 2) * (1 - y);
+        
+        if (x === 0) {
+          ctx.moveTo(x, canvasY);
+        } else {
+          ctx.lineTo(x, canvasY);
+        }
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Add legend
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = '#2563eb';
+      ctx.fillText('Original', 10, 20);
+      ctx.fillStyle = '#dc2626';
+      ctx.fillText('Detuned', 10, 40);
+    }
+
+  }, [waveType, frequency, amplitude, detune, calculateWavePoints]);
+
+  useEffect(() => {
+    draw();
+  }, [draw]);
+
+  return (
+    <Card className="w-full max-w-4xl">
+      <CardHeader>
+        <CardTitle>Wave Function Visualization</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex gap-4 mb-6">
+          <Button 
+            onClick={() => setWaveType('sine')}
+            variant={waveType === 'sine' ? 'default' : 'outline'}
+          >
+            Sine Wave
+          </Button>
+          <Button 
+            onClick={() => setWaveType('sawtooth')}
+            variant={waveType === 'sawtooth' ? 'default' : 'outline'}
+          >
+            Sawtooth Wave
+          </Button>
+          <Button 
+            onClick={() => setWaveType('square')}
+            variant={waveType === 'square' ? 'default' : 'outline'}
+          >
+            Square Wave
+          </Button>
+          <Button 
+            onClick={() => setWaveType('triangle')}
+            variant={waveType === 'triangle' ? 'default' : 'outline'}
+          >
+            Triangle Wave
+          </Button>
+          
+          <Button 
+            onClick={togglePlay}
+            variant="default"
+            className="ml-auto"
+          >
+            {isPlaying ? <Square className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+            {isPlaying ? 'Stop' : 'Play'}
+          </Button>
+        </div>
+
+        <div className="grid gap-6 mb-6">
+          {/* Basic Controls */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Frequency: {frequency.toFixed(1)} Hz</Label>
+            </div>
+            <Slider
+              value={[frequency]}
+              onValueChange={(value) => setFrequency(value[0])}
+              min={0.1}
+              max={5}
+              step={0.1}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Amplitude: {amplitude.toFixed(2)}</Label>
+            </div>
+            <Slider
+              value={[amplitude]}
+              onValueChange={(value) => setAmplitude(value[0])}
+              min={0}
+              max={1}
+              step={0.01}
+            />
+          </div>
+
+          {/* Advanced Controls */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Detune: {detune} cents</Label>
+            </div>
+            <Slider
+              value={[detune]}
+              onValueChange={(value) => setDetune(value[0])}
+              min={-100}
+              max={100}
+              step={1}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Filter Type</Label>
+            <Select value={filterType} onValueChange={setFilterType}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lowpass">Low Pass</SelectItem>
+                <SelectItem value="highpass">High Pass</SelectItem>
+                <SelectItem value="bandpass">Band Pass</SelectItem>
+                <SelectItem value="notch">Notch</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Filter Frequency: {filterFreq} Hz</Label>
+            </div>
+            <Slider
+              value={[filterFreq]}
+              onValueChange={(value) => setFilterFreq(value[0])}
+              min={20}
+              max={20000}
+              step={1}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Filter Resonance (Q): {filterQ.toFixed(1)}</Label>
+            </div>
+            <Slider
+              value={[filterQ]}
+              onValueChange={(value) => setFilterQ(value[0])}
+              min={0.1}
+              max={20}
+              step={0.1}
+            />
+          </div>
+
+          {/* Envelope Controls */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Attack: {attack.toFixed(2)} s</Label>
+            </div>
+            <Slider
+              value={[attack]}
+              onValueChange={(value) => setAttack(value[0])}
+              min={0}
+              max={2}
+              step={0.01}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Release: {release.toFixed(2)} s</Label>
+            </div>
+            <Slider
+              value={[release]}
+              onValueChange={(value) => setRelease(value[0])}
+              min={0}
+              max={2}
+              step={0.01}
+            />
+          </div>
+        </div>
+
+        <canvas 
+          id="waveCanvas" 
+          width={canvasWidth} 
+          height={canvasHeight}
+          className="border border-gray-200 rounded-lg"
+        />
+      </CardContent>
+    </Card>
+  );
+};
+
+export default WaveFunctionVisualizer;
